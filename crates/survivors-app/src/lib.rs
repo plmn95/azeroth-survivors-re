@@ -146,6 +146,12 @@ impl Plugin for SurvivorsPlugin {
             .add_systems(Startup, (hud::setup_hud, profile::load_profile))
             .add_systems(Update, hero::daylight)
             .add_systems(
+                PreUpdate,
+                hero::look_input
+                    .after(bevy::input::InputSystems)
+                    .before(bevy::ui::UiSystems::Focus),
+            )
+            .add_systems(
                 Update,
                 (
                     hero::drop_stray_buttons,

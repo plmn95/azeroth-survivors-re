@@ -2,9 +2,8 @@
 //! drawn from `UI-TargetingFrame` with the stock 1.12 offsets. A click on an enemy targets it,
 //! and the abilities favour the target ([`Target`], read by [`super::abilities`]).
 //!
-//! A click is a press and a release that stay put: the left button also drags the camera, so a
-//! drag targets nothing. A click on an enemy (the cursor's ray through its body, else the ground
-//! point under the cursor within a yard or two) targets the nearest one; a click on bare ground
+//! A click is a press and a release that stay put: a drag targets nothing. A click on an enemy
+//! (the cursor's ray through its body, else the ground point under the cursor within a yard or two) targets the nearest one; a click on bare ground
 //! clears the target. **Esc** is left to the pause. A target that dies is dropped.
 
 use benilla_world::view::WorldCamera;
@@ -64,7 +63,7 @@ const FOE_ICONS: [&str; 3] = [
     "Interface\\Icons\\INV_Misc_Head_Dragon_01",
 ];
 const WHOLE: [f32; 4] = [0.0, 1.0, 0.0, 1.0];
-/// A press and release this close (screen px) are a click, not a camera drag.
+/// A press and release this close (screen px) are a click, not a pointer drag.
 const CLICK_PX: f32 = 5.0;
 /// How far from the cursor's ground point an enemy still counts as clicked (yd, besides its radius).
 const AIM_YD: f32 = 1.5;
@@ -146,6 +145,7 @@ fn pick_index(origin: Vec3, dir: Vec3, aim: Option<Vec3>, foes: &[(Vec3, f32)]) 
 /// A left click, press to release, targets the enemy under the cursor or clears the target.
 #[allow(clippy::too_many_arguments)]
 fn click(
+    rig: Res<super::hero::CamRig>,
     phase: Res<State<Phase>>,
     mouse: Res<ButtonInput<MouseButton>>,
     windows: Query<&Window, With<PrimaryWindow>>,
@@ -156,7 +156,7 @@ fn click(
     mut target: ResMut<Target>,
     mut press: Local<Option<Vec2>>,
 ) {
-    if *phase.get() != Phase::Playing {
+    if *phase.get() != Phase::Playing || rig.looking {
         *press = None;
         return;
     }

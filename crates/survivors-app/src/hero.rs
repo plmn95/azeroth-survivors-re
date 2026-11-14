@@ -4,6 +4,7 @@ use benilla_world::view::WorldCamera;
 use benilla_world::world_point::WorldPoint;
 use bevy::input::mouse::{AccumulatedMouseMotion, MouseScrollUnit, MouseWheel};
 use bevy::prelude::*;
+use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
 
 use super::data::{self, ClassDef};
 use super::units::{self, flat, wow_to_bevy, yaw_toward, Fx, Marks, UnitSpec};
@@ -30,15 +31,14 @@ pub(super) const HERO_RADIUS: f32 = 0.7;
 const JUMP_SPEED: f32 = 7.955_547;
 const GRAVITY: f32 = 19.291_105;
 
-/// Radians of orbit per raw mouse unit while right-dragging.
+/// Radians of orbit per raw mouse unit while dragging the menu preview.
 const ORBIT_RATE: f32 = 0.008;
-/// Elevation clamp (radians): ~10°..~83° above the horizon, so the camera never dives underground.
-const PITCH_MIN: f32 = 0.18;
-const PITCH_MAX: f32 = 1.45;
-/// The tilt a run starts at.
-const START_PITCH: f32 = 61.0 * std::f32::consts::PI / 180.0;
-/// Left and right arrow turn the camera this fast, radians per second: WoW's keyboard turn rate.
-const TURN_RATE: f32 = std::f32::consts::PI;
+/// Run framing is third-person rather than overhead; the menu has its own rig.
+const START_PITCH: f32 = 25.0 * std::f32::consts::PI / 180.0;
+/// Raw mouse motion is already a per-frame displacement, so it is not multiplied by dt.
+const LOOK_RATE: f32 = 0.003;
+const LOOK_PITCH_MIN: f32 = -0.25;
+const LOOK_PITCH_MAX: f32 = 1.45;
 /// Wheel zoom range, yards from the hero's shoulders.
 const ZOOM_MIN: f32 = 1.5;
 const ZOOM_MAX: f32 = 70.0;
@@ -65,10 +65,14 @@ const MENU_ZOOM_SMOOTH: f32 = 9.0;
 pub(super) struct CamRig {
     pub dist: f32,
     pub orbit: f32,
-    /// Orbit azimuth (radians) around the hero; right-drag swings it during play.
+    /// Run azimuth (radians); separate from the menu preview's orbit.
     pub yaw: f32,
-    /// Elevation above the horizon (radians), clamped so the camera never dives underground.
+    /// Run elevation above the horizon (radians).
     pub pitch: f32,
+    /// The run currently owns the mouse. A transition discards stale motion.
+    pub looking: bool,
+    /// Pointer position restored when an overlay or Alt releases the mouse.
+    pub cursor_stash: Option<Vec2>,
     /// Pick-screen camera distance as drawn, easing toward `menu_zoom`; apart from `dist` so the
     /// menu zoom leaves the game camera alone.
     pub menu_dist: f32,
@@ -85,10 +89,12 @@ pub(super) struct CamRig {
 impl Default for CamRig {
     fn default() -> Self {
         Self {
-            dist: 30.0,
+            dist: 18.0,
             orbit: 0.6,
             yaw: 0.0,
             pitch: START_PITCH,
+            looking: false,
+            cursor_stash: None,
             menu_dist: MENU_DIST,
             menu_zoom: MENU_DIST,
             menu_pitch: MENU_PITCH,
@@ -271,6 +277,84 @@ pub(super) fn daylight(debug: Option<ResMut<benilla_world::dev_state::DebugState
     }
 }
 
+/// Continuous third-person look while playing. Menus and Alt hand the pointer back; the
+/// capture frame never turns the camera with motion left over from another input context.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn look_input(
+    keys: Res<ButtonInput<KeyCode>>,
+    phase: Res<State<Phase>>,
+    next: Option<Res<NextState<Phase>>>,
+    run: Res<Run>,
+    motion: Res<AccumulatedMouseMotion>,
+    prefs: Res<super::prefs::Prefs>,
+    loading: Option<Res<benilla_app::survivors_host::loading_screen::LoadingScreen>>,
+    overlays: (
+        Option<Res<super::options::OptionsUi>>,
+        Option<Res<super::charpanel::CharPanel>>,
+        Option<Res<super::worldmap::WorldMapUi>>,
+    ),
+    mut rig: ResMut<CamRig>,
+    mut windows: Query<(&mut Window, &mut CursorOptions), With<PrimaryWindow>>,
+) {
+    let Ok((mut window, mut cursor)) = windows.single_mut() else {
+        rig.looking = false;
+        return;
+    };
+    let overlay = overlays.0.as_ref().is_some_and(|ui| ui.open)
+        || overlays.1.as_ref().is_some_and(|ui| ui.open)
+        || overlays.2.as_ref().is_some_and(|ui| ui.open);
+    // State transitions run after PreUpdate; honor queued changes before UI hit testing.
+    let phase = match next.as_deref() {
+        Some(NextState::Pending(phase) | NextState::PendingIfNeq(phase)) => phase,
+        _ => phase.get(),
+    };
+    let covered = loading.as_ref().is_some_and(|cover| cover.covering());
+    let looking = window.focused
+        && *phase == Phase::Playing
+        && run.dead_t.is_none()
+        && !overlay
+        && !covered
+        && !keys.any_pressed([KeyCode::AltLeft, KeyCode::AltRight])
+        && !keys.just_pressed(KeyCode::Escape);
+    let was_looking = rig.looking;
+    rig.looking = looking;
+    if looking && !was_looking {
+        rig.cursor_stash = window.cursor_position();
+    } else if !looking && was_looking {
+        if let Some(pos) = rig.cursor_stash.take().filter(|_| window.focused) {
+            window.set_cursor_position(Some(pos));
+        }
+    }
+    // A hidden cursor must not leave a hovered HUD button at its old screen position.
+    if looking && window.cursor_position().is_some() {
+        window.set_cursor_position(None);
+    }
+    let grab = if looking {
+        CursorGrabMode::Locked
+    } else {
+        CursorGrabMode::None
+    };
+    // Only write on transitions: winit re-applies changed cursor options to the OS.
+    if cursor.grab_mode != grab || cursor.visible == looking {
+        cursor.grab_mode = grab;
+        cursor.visible = !looking;
+    }
+    if looking && was_looking {
+        let rate = LOOK_RATE * prefs.camera_sensitivity;
+        rig.yaw = (rig.yaw - motion.delta.x * rate).rem_euclid(std::f32::consts::TAU);
+        let flip = if prefs.invert_pitch { -1.0 } else { 1.0 };
+        rig.pitch =
+            (rig.pitch + flip * motion.delta.y * rate).clamp(LOOK_PITCH_MIN, LOOK_PITCH_MAX);
+    }
+    if looking != was_looking || motion.delta != Vec2::ZERO {
+        debug!(
+            looking, focused = window.focused, ?phase, covered, overlay, delta = ?motion.delta,
+            yaw = rig.yaw, pitch = rig.pitch,
+            "survivors camera input"
+        );
+    }
+}
+
 /// The ground under the mouse cursor, `None` with the cursor off the window. The aimed mobility
 /// spells (Blink, Charge) go toward it.
 #[derive(Resource, Default)]
@@ -280,12 +364,16 @@ pub(super) struct AimPoint(pub(super) Option<Vec3>);
 /// terrain height there, a few times over, which settles on hills within a frame.
 pub(super) fn aim_cursor(
     windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
+    rig: Res<CamRig>,
     cams: Query<(&Camera, &Transform), With<WorldCamera>>,
     hero: Query<&Transform, (With<Hero>, Without<WorldCamera>)>,
     world: WorldPoint,
     mut aim: ResMut<AimPoint>,
 ) {
     let point = (|| {
+        if rig.looking {
+            return None;
+        }
         let cursor = windows.single().ok()?.cursor_position()?;
         let (cam, tf) = cams.single().ok()?;
         let ray = cam
@@ -369,33 +457,13 @@ pub(super) fn drive_hero(
         Ok((mut tf, mut mv, mut hm)) => {
             let dt = time.delta_secs();
             let mut dir = Vec3::ZERO;
-            // Under the player's keys the hero faces the camera's forward and strafes or
-            // backpedals against it; driven, he faces where he runs.
-            let mut face = None;
             if let Some(auto) = auto
                 .as_deref()
                 .filter(|_| *phase.get() == Phase::Playing && run.dead_t.is_none())
             {
                 dir = super::auto::steer(auto);
             } else if *phase.get() == Phase::Playing && run.dead_t.is_none() {
-                if keys.any_pressed([KeyCode::KeyW, KeyCode::ArrowUp]) {
-                    dir.z -= 1.0;
-                }
-                if keys.any_pressed([KeyCode::KeyS, KeyCode::ArrowDown]) {
-                    dir.z += 1.0;
-                }
-                // A and D strafe; the left and right arrows turn the camera instead
-                // ([`place_camera`]).
-                if keys.pressed(KeyCode::KeyA) {
-                    dir.x -= 1.0;
-                }
-                if keys.pressed(KeyCode::KeyD) {
-                    dir.x += 1.0;
-                }
-                // Camera-relative.
-                let (sy, cy) = rig.yaw.sin_cos();
-                dir = Vec3::new(dir.x * cy + dir.z * sy, 0.0, dir.z * cy - dir.x * sy);
-                face = Some(Vec3::new(-sy, 0.0, -cy));
+                dir = movement_direction(&keys, rig.yaw);
             }
             let mut pos = tf.translation;
             if dir != Vec3::ZERO && dt > 0.0 {
@@ -410,9 +478,8 @@ pub(super) fn drive_hero(
                 });
                 pos = collide_step(&collision, body, pos, dir * speed, time.delta());
                 mv.speed = speed;
-                let look = face.unwrap_or(dir);
-                mv.flags = gait(look, dir);
-                let target = Quat::from_rotation_y(yaw_toward(look));
+                mv.flags = move_flags::FORWARD;
+                let target = Quat::from_rotation_y(yaw_toward(dir));
                 tf.rotation = tf.rotation.slerp(target, (dt * 20.0).min(1.0));
             } else if mv.speed != 0.0 || mv.flags != 0 {
                 mv.speed = 0.0;
@@ -482,8 +549,8 @@ pub(super) fn drop_stray_buttons(
 }
 
 /// At the menu a slow orbit the player can take over: a left drag that began over the scene swings
-/// and tilts it, the wheel zooms, and the orbit resumes where it was left. In play, a drag with
-/// either mouse button swings and tilts it around the hero, as in WoW.
+/// and tilts it, the wheel zooms, and the orbit resumes where it was left. In play,
+/// the camera follows the hero at the yaw and pitch set by [`look_input`].
 #[allow(clippy::too_many_arguments)]
 pub(super) fn place_camera(
     time: Res<Time<Real>>,
@@ -492,7 +559,6 @@ pub(super) fn place_camera(
     mut wheel: MessageReader<MouseWheel>,
     mouse: Res<ButtonInput<MouseButton>>,
     motion: Res<AccumulatedMouseMotion>,
-    keys: Res<ButtonInput<KeyCode>>,
     player: Res<benilla_app::survivors_host::player::Player>,
     ui: UiCover,
     world: WorldPoint,
@@ -569,20 +635,6 @@ pub(super) fn place_camera(
         *arm = 0.0;
         (eye, look)
     } else {
-        // Either mouse button drags the camera around the hero, as in WoW.
-        if mouse.any_pressed([MouseButton::Left, MouseButton::Right]) {
-            let rate = ORBIT_RATE * prefs.camera_sensitivity;
-            let flip = if prefs.invert_pitch { -1.0 } else { 1.0 };
-            rig.yaw -= motion.delta.x * rate;
-            rig.pitch = (rig.pitch + flip * motion.delta.y * rate).clamp(PITCH_MIN, PITCH_MAX);
-        }
-        // The left and right arrows turn it, so one hand runs and strafes on WASD while the
-        // other turns.
-        if *phase.get() == Phase::Playing {
-            let turn = f32::from(u8::from(keys.pressed(KeyCode::ArrowLeft)))
-                - f32::from(u8::from(keys.pressed(KeyCode::ArrowRight)));
-            rig.yaw += turn * TURN_RATE * dt;
-        }
         let (sy, cy) = rig.yaw.sin_cos();
         let (sp, cp) = rig.pitch.sin_cos();
         let look = focus + Vec3::Y * 1.4;
@@ -936,23 +988,22 @@ fn fall(hero: &mut HeroState, store: &mut ObjectStore, marks: &mut Marks) {
     marks.clear();
 }
 
-/// The movement flags for running `dir` while facing `look`: forward, backpedal or strafe, by
-/// which quarter the run falls in, so the walk, backpedal and strafe animations play.
-fn gait(look: Vec3, dir: Vec3) -> u32 {
-    let ahead = look.dot(dir);
-    // Positive when `dir` is to the hero's left: WoW faces -Z with +X on the right.
-    let left = look.cross(dir).y;
-    let quarter = std::f32::consts::FRAC_1_SQRT_2;
-    if ahead >= quarter {
-        move_flags::FORWARD
-    } else if ahead <= -quarter {
-        move_flags::BACKWARD
-    } else if left > 0.0 {
-        move_flags::STRAFE_LEFT
-    } else {
-        move_flags::STRAFE_RIGHT
-    }
+/// Movement follows the camera's horizontal basis, independent of its pitch. Diagonals
+/// keep the same speed as a single direction and opposite inputs cancel.
+fn movement_direction(keys: &ButtonInput<KeyCode>, yaw: f32) -> Vec3 {
+    let pressed = |a, b| f32::from(u8::from(keys.any_pressed([a, b])));
+    let local = Vec3::new(
+        pressed(KeyCode::KeyD, KeyCode::ArrowRight) - pressed(KeyCode::KeyA, KeyCode::ArrowLeft),
+        0.0,
+        pressed(KeyCode::KeyS, KeyCode::ArrowDown) - pressed(KeyCode::KeyW, KeyCode::ArrowUp),
+    )
+    .normalize_or_zero();
+    Quat::from_rotation_y(yaw) * local
 }
+
+#[cfg(test)]
+#[path = "hero/movement_tests.rs"]
+mod movement_tests;
 
 /// The ground-plane distance from the hero, the measure every range in the mode uses.
 pub(super) fn reach(hero: Vec3, other: Vec3) -> f32 {

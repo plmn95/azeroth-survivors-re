@@ -38,9 +38,9 @@ fn in_run(phase: Res<State<Phase>>) -> bool {
 }
 
 #[derive(Resource, Default)]
-struct CharPanel {
+pub(super) struct CharPanel {
     /// C: whether the window shows.
-    open: bool,
+    pub(super) open: bool,
     root: Option<Entity>,
     /// Per line: the row, its label and its value.
     rows: Vec<(Entity, Entity, Entity)>,
