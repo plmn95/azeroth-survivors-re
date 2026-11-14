@@ -30,15 +30,10 @@ pub(super) const HERO_RADIUS: f32 = 0.7;
 const JUMP_SPEED: f32 = 7.955_547;
 const GRAVITY: f32 = 19.291_105;
 
-/// Radians of orbit per raw mouse unit while right-dragging.
+/// Radians of orbit per raw mouse unit while dragging the menu preview.
 const ORBIT_RATE: f32 = 0.008;
-/// Elevation clamp (radians): ~10°..~83° above the horizon, so the camera never dives underground.
-const PITCH_MIN: f32 = 0.18;
-const PITCH_MAX: f32 = 1.45;
-/// The tilt a run starts at.
+/// The fixed elevation of the run camera.
 const START_PITCH: f32 = 61.0 * std::f32::consts::PI / 180.0;
-/// Left and right arrow turn the camera this fast, radians per second: WoW's keyboard turn rate.
-const TURN_RATE: f32 = std::f32::consts::PI;
 /// Wheel zoom range, yards from the hero's shoulders.
 const ZOOM_MIN: f32 = 1.5;
 const ZOOM_MAX: f32 = 70.0;
@@ -65,9 +60,9 @@ const MENU_ZOOM_SMOOTH: f32 = 9.0;
 pub(super) struct CamRig {
     pub dist: f32,
     pub orbit: f32,
-    /// Orbit azimuth (radians) around the hero; right-drag swings it during play.
+    /// Fixed run azimuth (radians); separate from the menu preview's orbit.
     pub yaw: f32,
-    /// Elevation above the horizon (radians), clamped so the camera never dives underground.
+    /// Fixed run elevation above the horizon (radians).
     pub pitch: f32,
     /// Pick-screen camera distance as drawn, easing toward `menu_zoom`; apart from `dist` so the
     /// menu zoom leaves the game camera alone.
@@ -357,7 +352,6 @@ pub(super) fn drive_hero(
     run: Res<Run>,
     selection: Res<Selection>,
     bounds: Res<super::route::Bounds>,
-    rig: Res<CamRig>,
     world: WorldPoint,
     collision: benilla_world::collision::WorldCollision,
     mut body: Local<Option<avian3d::prelude::Collider>>,
@@ -369,33 +363,13 @@ pub(super) fn drive_hero(
         Ok((mut tf, mut mv, mut hm)) => {
             let dt = time.delta_secs();
             let mut dir = Vec3::ZERO;
-            // Under the player's keys the hero faces the camera's forward and strafes or
-            // backpedals against it; driven, he faces where he runs.
-            let mut face = None;
             if let Some(auto) = auto
                 .as_deref()
                 .filter(|_| *phase.get() == Phase::Playing && run.dead_t.is_none())
             {
                 dir = super::auto::steer(auto);
             } else if *phase.get() == Phase::Playing && run.dead_t.is_none() {
-                if keys.any_pressed([KeyCode::KeyW, KeyCode::ArrowUp]) {
-                    dir.z -= 1.0;
-                }
-                if keys.any_pressed([KeyCode::KeyS, KeyCode::ArrowDown]) {
-                    dir.z += 1.0;
-                }
-                // A and D strafe; the left and right arrows turn the camera instead
-                // ([`place_camera`]).
-                if keys.pressed(KeyCode::KeyA) {
-                    dir.x -= 1.0;
-                }
-                if keys.pressed(KeyCode::KeyD) {
-                    dir.x += 1.0;
-                }
-                // Camera-relative.
-                let (sy, cy) = rig.yaw.sin_cos();
-                dir = Vec3::new(dir.x * cy + dir.z * sy, 0.0, dir.z * cy - dir.x * sy);
-                face = Some(Vec3::new(-sy, 0.0, -cy));
+                dir = movement_direction(&keys);
             }
             let mut pos = tf.translation;
             if dir != Vec3::ZERO && dt > 0.0 {
@@ -410,9 +384,8 @@ pub(super) fn drive_hero(
                 });
                 pos = collide_step(&collision, body, pos, dir * speed, time.delta());
                 mv.speed = speed;
-                let look = face.unwrap_or(dir);
-                mv.flags = gait(look, dir);
-                let target = Quat::from_rotation_y(yaw_toward(look));
+                mv.flags = move_flags::FORWARD;
+                let target = Quat::from_rotation_y(yaw_toward(dir));
                 tf.rotation = tf.rotation.slerp(target, (dt * 20.0).min(1.0));
             } else if mv.speed != 0.0 || mv.flags != 0 {
                 mv.speed = 0.0;
@@ -482,8 +455,8 @@ pub(super) fn drop_stray_buttons(
 }
 
 /// At the menu a slow orbit the player can take over: a left drag that began over the scene swings
-/// and tilts it, the wheel zooms, and the orbit resumes where it was left. In play, a drag with
-/// either mouse button swings and tilts it around the hero, as in WoW.
+/// and tilts it, the wheel zooms, and the orbit resumes where it was left. In play,
+/// the camera follows at a fixed angle, independent of movement and mouse input.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn place_camera(
     time: Res<Time<Real>>,
@@ -492,7 +465,6 @@ pub(super) fn place_camera(
     mut wheel: MessageReader<MouseWheel>,
     mouse: Res<ButtonInput<MouseButton>>,
     motion: Res<AccumulatedMouseMotion>,
-    keys: Res<ButtonInput<KeyCode>>,
     player: Res<benilla_app::survivors_host::player::Player>,
     ui: UiCover,
     world: WorldPoint,
@@ -569,20 +541,6 @@ pub(super) fn place_camera(
         *arm = 0.0;
         (eye, look)
     } else {
-        // Either mouse button drags the camera around the hero, as in WoW.
-        if mouse.any_pressed([MouseButton::Left, MouseButton::Right]) {
-            let rate = ORBIT_RATE * prefs.camera_sensitivity;
-            let flip = if prefs.invert_pitch { -1.0 } else { 1.0 };
-            rig.yaw -= motion.delta.x * rate;
-            rig.pitch = (rig.pitch + flip * motion.delta.y * rate).clamp(PITCH_MIN, PITCH_MAX);
-        }
-        // The left and right arrows turn it, so one hand runs and strafes on WASD while the
-        // other turns.
-        if *phase.get() == Phase::Playing {
-            let turn = f32::from(u8::from(keys.pressed(KeyCode::ArrowLeft)))
-                - f32::from(u8::from(keys.pressed(KeyCode::ArrowRight)));
-            rig.yaw += turn * TURN_RATE * dt;
-        }
         let (sy, cy) = rig.yaw.sin_cos();
         let (sp, cp) = rig.pitch.sin_cos();
         let look = focus + Vec3::Y * 1.4;
@@ -936,23 +894,21 @@ fn fall(hero: &mut HeroState, store: &mut ObjectStore, marks: &mut Marks) {
     marks.clear();
 }
 
-/// The movement flags for running `dir` while facing `look`: forward, backpedal or strafe, by
-/// which quarter the run falls in, so the walk, backpedal and strafe animations play.
-fn gait(look: Vec3, dir: Vec3) -> u32 {
-    let ahead = look.dot(dir);
-    // Positive when `dir` is to the hero's left: WoW faces -Z with +X on the right.
-    let left = look.cross(dir).y;
-    let quarter = std::f32::consts::FRAC_1_SQRT_2;
-    if ahead >= quarter {
-        move_flags::FORWARD
-    } else if ahead <= -quarter {
-        move_flags::BACKWARD
-    } else if left > 0.0 {
-        move_flags::STRAFE_LEFT
-    } else {
-        move_flags::STRAFE_RIGHT
-    }
+/// Screen directions on the fixed run camera's ground plane. Normalize once so diagonals
+/// move at the same speed as a single direction; opposite inputs cancel.
+fn movement_direction(keys: &ButtonInput<KeyCode>) -> Vec3 {
+    let pressed = |a, b| f32::from(u8::from(keys.any_pressed([a, b])));
+    Vec3::new(
+        pressed(KeyCode::KeyD, KeyCode::ArrowRight) - pressed(KeyCode::KeyA, KeyCode::ArrowLeft),
+        0.0,
+        pressed(KeyCode::KeyS, KeyCode::ArrowDown) - pressed(KeyCode::KeyW, KeyCode::ArrowUp),
+    )
+    .normalize_or_zero()
 }
+
+#[cfg(test)]
+#[path = "hero/movement_tests.rs"]
+mod movement_tests;
 
 /// The ground-plane distance from the hero, the measure every range in the mode uses.
 pub(super) fn reach(hero: Vec3, other: Vec3) -> f32 {

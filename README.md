@@ -19,6 +19,7 @@ The `features` branch is upstream plus everything below. Newest first.
 
 | Feature | What it does | Screenshot |
 | --- | --- | --- |
+| Screen-relative movement | WASD or the arrow keys move in screen directions at equal speed, including diagonals. The hero faces movement and the camera follows at a fixed angle; mouse dragging no longer rotates the run view. Zoom, jumping, collision and class movement spells still work. | <img src="docs/screenshots/fork-screen-movement.jpg" width="480" alt="A hero facing down the screen after moving with S while the camera keeps its angle"> |
 | Undying Run | A run across the Eastern Kingdoms instead of one battleground: from Westfall through Elwynn Forest and Redridge to Duskwood. A golden arrow over the hero and a line under the clock point to the next stop; each zone sends its own horde, mostly from ahead, and its own bosses on the clock; heals lie on the road; the stops in between heal and the last one closes a ring with the finale. The world streams in ahead without a loading screen, the pathing grid travels with the hero, and co-op guests follow the host's progress (protocol 3). Its own line above the zone list, open once all four zones are. The pace is not tuned yet: the autopilot is slow on the road. | <img src="docs/screenshots/fork-undying.jpg" width="480" alt="A mage on the road through Westfall, the golden arrow over him and Next: Elwynn Forest, 1193 yd, 2 of 4 under the clock"> |
 | World map on the hub | A World Map tab (or M) on the hub shows Eastern Kingdoms or Kalimdor with a pin per battleground. The zone under the cursor lights up as in the client and a strip names its level, best run, lock and zone quest; a click picks it. Locked zones are grey. | <img src="docs/screenshots/fork-worldmap-hub.jpg" width="480" alt="The hub's world map of the Eastern Kingdoms with Westfall picked and its info strip"> |
 | Battlefield map | The map's second view: the battleground from the minimap tiles, darkened past the barrier with its ring, the hero's arrow, enemies as red dots (yellow for the ones your quests want), loot in its quality colour, and symbols for camps, chests, shrines, bosses, rares, elites, quest items, the portal and the party, named under the mouse. | <img src="docs/screenshots/fork-worldmap-field.jpg" width="480" alt="The battlefield view: the barrier ring, four guard camps as skulls, the hero in the middle"> |
@@ -83,7 +84,7 @@ The `features` branch is upstream plus everything below. Newest first.
 | Enemy pathfinding | Enemies walk around trees, rocks and buildings: a walkability grid scanned from the world's colliders and a flow field toward the hero, cheap enough for hundreds of enemies. | |
 | Hero collision | The hero no longer walks through trees, rocks and buildings; he stops at them and slides along, as the WoW player does. | |
 | Character window | **C** opens a window with the hero's numbers as they stand: health, armor, speed, damage, attack and cast speed, crit, area, pickup range, gold, and every ability and talent with its rank. | <img src="docs/screenshots/fork-charpanel.jpg" width="480" alt="The character window open on the left during a run"> |
-| Free camera | No more locked camera: the left and right arrows or a mouse drag turn it, WASD runs and strafes against it, so one hand moves while the other turns. | |
+| Fixed run camera | The camera follows at a fixed angle, with mouse-wheel zoom and obstacle avoidance. The character preview can still be rotated in the menu. | |
 | Enemy levels | The level sits beside every enemy health bar, coloured as WoW colours it against your character's level. | <img src="docs/screenshots/fork-enemy-levels.jpg" width="480" alt="Enemy health bars with their levels"> |
 | Pick-screen camera | The camera at the pick screen turns slowly by itself, follows a left-mouse drag and zooms with the wheel; it resumes turning three seconds after the last drag. | |
 | Visible barrier | The edge of the battlefield is a glowing runic wall instead of an invisible one. It brightens as you come close and flashes when it pushes you back. | <img src="docs/screenshots/fork-barrier.jpg" width="480" alt="A runic barrier wall curving across the Gurubashi Arena floor"> |
@@ -127,9 +128,9 @@ minutes. **No server, no login, no account**: fully offline and self-contained.
   `Damage 20 » 26` or `Targets 2 » 3`.
 - **A class movement spell on F** from level 5, aimed at the cursor: Blink, Charge, Sprint, Dash,
   Fade, Ghost Wolf, Aspect of the Cheetah, Blessing of Freedom, Howl of Terror.
-- **A free camera:** a drag with either mouse button or the left and right arrows turn it
-  around the hero, as in WoW; WASD runs and strafes against it, and the wheel zooms from over
-  the shoulder out to 70 yards.
+- **Simple movement and a fixed camera:** WASD or the arrows move in screen directions and the
+  hero faces movement. The camera follows without rotating; the wheel zooms from over the
+  shoulder out to 70 yards.
 - A light sharpen-and-colour pass over the picture (**G** toggles it).
 
 ## Play it
@@ -186,8 +187,8 @@ so the variables keep working. `--help` lists every flag.
 
 ## Controls
 
-See [CONTROLS.md](CONTROLS.md). The short version: **WASD** to run and strafe, the **left/right arrows** to turn, **Space** to jump, **F**
-for your class's movement spell, the **mouse wheel** to zoom, a **mouse drag** to turn the camera, **V** for
+See [CONTROLS.md](CONTROLS.md). The short version: **WASD** or the **arrow keys** to move, **Space** to jump, **F**
+for your class's movement spell, the **mouse wheel** to zoom, **V** for
 enemy health bars, **C** for the character window, **Esc** to pause, **1/2/3** to pick a level-up card.
 
 ## The game data (not in this repo)
