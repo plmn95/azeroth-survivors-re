@@ -145,6 +145,7 @@ fn pick_index(origin: Vec3, dir: Vec3, aim: Option<Vec3>, foes: &[(Vec3, f32)]) 
 /// A left click, press to release, targets the enemy under the cursor or clears the target.
 #[allow(clippy::too_many_arguments)]
 fn click(
+    rig: Res<super::hero::CamRig>,
     phase: Res<State<Phase>>,
     mouse: Res<ButtonInput<MouseButton>>,
     windows: Query<&Window, With<PrimaryWindow>>,
@@ -155,7 +156,7 @@ fn click(
     mut target: ResMut<Target>,
     mut press: Local<Option<Vec2>>,
 ) {
-    if *phase.get() != Phase::Playing {
+    if *phase.get() != Phase::Playing || rig.looking {
         *press = None;
         return;
     }

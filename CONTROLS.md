@@ -1,18 +1,20 @@
 # Controls
 
-**Azeroth Survivors** — top-down movement with a fixed follow camera.
+**Azeroth Survivors** — third-person movement with independent mouse look.
 
 | When | Key / Input | Action |
 |---|---|---|
 | Menu | Click a race, gender, class and zone | make your pick (**Randomize** rolls one) |
 | Menu | **Enter** (or **Enter World**) | start the run; the world travels to the zone picked |
-| Playing | **W / A / S / D** or **arrow keys** | move up / left / down / right on screen; the hero faces movement |
+| Playing | **W / A / S / D** or **arrow keys** | move relative to the camera; the hero faces travel |
+| Playing | **mouse movement** | look around the hero, with no mouse button held |
+| Playing | hold **Alt / Option** | release the cursor for UI clicks, targeting or cursor aiming; let go to resume looking |
 | Playing | **Space** | jump |
-| Playing | **F** (from level 5) | your class's movement spell: Blink, Charge… aim at the cursor |
+| Playing | **F** (from level 5) | your class's movement spell: directional spells follow the hero's facing; hold **Alt / Option** to aim at the cursor |
 | Playing | **V** | enemy health bars on / off |
 | Playing | **C** | character window: stats, abilities and talents |
 | Playing | **Tab** (or click the icon at the bottom right) | cycle the focus the abilities pick targets by: nearest, lowest health, strongest |
-| Playing | **left click** on an enemy | target it: its frame shows beside yours, and the abilities hit it first while it is in range (a click on bare ground clears it) |
+| Playing | hold **Alt / Option** + **left click** on an enemy | target it: its frame shows beside yours, and the abilities hit it first while it is in range (a click on bare ground clears it) |
 | Playing | (no key) | the quest tracker under the minimap lists the run's three quests: slay, gather the items a creature drops (walk over them), survive |
 | Level up | (no key) | an ability at rank 8 with its matching talent at rank 3 offers an **Evolution** card; found recipes are kept in the spellbook shown at the bottom |
 | Any | **G** | toggle the picture polish (`?grade=0` starts it off) |
@@ -36,7 +38,12 @@
 | Debug | **F8** | the overlay (spawn rings, position, keys) on / off |
 | Debug | **F9** | jump to the edge of the battleground the camera looks at |
 
-The camera follows the hero at a fixed angle. WASD and the arrows move in screen directions,
-with equal speed on diagonals; releasing the keys stops movement and keeps the last facing.
-Mouse dragging does not rotate the view during a run. In the menu the camera slowly orbits the
-preview hero; a left drag turns it and the wheel zooms. Your race, gender, class and zone are remembered across reloads.
+The mouse looks around without turning a stationary hero. WASD and the arrows move relative
+to the camera, with equal speed on diagonals; releasing the keys stops movement and keeps the
+last facing. The closer, lower starting view is a local tuning choice; zoom and camera
+collision still work.
+
+Hold **Alt / Option** to use the cursor during a run. Pause, level-up choices, menus, the character
+window, maps and options release it automatically; losing window focus also releases it.
+In the menu the camera slowly orbits the preview hero; a left drag turns it and the wheel
+zooms. Your race, gender, class and zone are remembered across reloads.

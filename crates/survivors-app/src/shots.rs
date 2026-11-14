@@ -5,16 +5,19 @@
 //! - `WOW_SURVIVORS_SCRIPT` (`--script`) plays a timeline against the run, for a test without
 //!   anyone at the keyboard: `;`-separated steps, each `<seconds> <action>`, the seconds counted
 //!   from the run's start. The actions: `shot <name>` saves `<name>.png` into the shots folder,
-//!   `key <KEY>` taps a key for one frame, `hold <KEY> <seconds>` keeps it down, `quit` ends the
-//!   game. Keys are `F1`..`F12`, `A`..`Z`, `0`..`9`, `Space`, `Escape`, `Enter`, `Tab` and the
-//!   arrows (`Up`, `Down`, `Left`, `Right`). Example, with `--debug`:
-//!   `6 shot overlay; 7 key F9; 8.5 shot edge; 9 hold W 2; 12 shot walked; 13 quit`.
+//!   `key <KEY>` taps a key for one frame, `hold <KEY> <seconds>` keeps it down,
+//!   `look <dx> <dy>` adds finite relative mouse motion for one frame, `focus` requests window
+//!   focus, and `quit` ends the game.
+//!   Keys are `F1`..`F12`, `A`..`Z`, `0`..`9`, `Space`, `Escape`, `Enter`, `Tab`,
+//!   `Alt` / `AltLeft`, `AltRight` and the arrows (`Up`, `Down`, `Left`, `Right`). Example,
+//!   with `--debug`: `0 focus; 6 look 120 -20; 7 shot turned; 8 hold Alt 2; 11 quit`.
 
 use std::path::PathBuf;
 
-use bevy::input::InputSystems;
+use bevy::input::{mouse::AccumulatedMouseMotion, InputSystems};
 use bevy::prelude::*;
 use bevy::render::view::screenshot::{save_to_disk, Screenshot};
+use bevy::window::PrimaryWindow;
 
 use super::Phase;
 
@@ -24,6 +27,8 @@ enum Action {
     Shot(String),
     Key(KeyCode),
     Hold(KeyCode, f32),
+    Look(Vec2),
+    Focus,
     Quit,
 }
 
@@ -50,8 +55,8 @@ pub(super) fn plugin(app: &mut App) {
         ..default()
     })
     .add_systems(Update, hotkey)
-    // After the keyboard is read and before anything reads it, so a scripted key looks typed.
-    .add_systems(PreUpdate, play.after(InputSystems));
+    // After hardware input is read, before gameplay consumes scripted keys and mouse motion.
+    .add_systems(PreUpdate, play.after(InputSystems).before(super::hero::look_input));
 }
 
 /// The folder screenshots go to.
@@ -98,12 +103,15 @@ fn hotkey(
     }
 }
 
-/// Play the script from the run's start: tap, hold and release keys, take the shots, quit.
+/// Play the script from the run's start: keys, relative mouse motion, screenshots and quit.
 fn play(
     time: Res<Time<Real>>,
     phase: Res<State<Phase>>,
     mut script: ResMut<Script>,
     mut input: ResMut<ButtonInput<KeyCode>>,
+    mut motion: ResMut<AccumulatedMouseMotion>,
+    mut hold: ResMut<benilla_world::modkeys::SyntheticHold>,
+    mut windows: Query<&mut Window, With<PrimaryWindow>>,
     mut commands: Commands,
     mut exit: MessageWriter<AppExit>,
 ) {
@@ -122,6 +130,7 @@ fn play(
         let keep = t < until;
         if !keep {
             input.release(k);
+            hold.0.retain(|&held| held != k);
         }
         keep
     });
@@ -148,10 +157,24 @@ fn play(
                 input.press(k);
                 s.down.push((k, t + secs));
             }
+            Action::Look(delta) => {
+                motion.delta += delta;
+            }
+            Action::Focus => {
+                for mut window in &mut windows {
+                    window.focused = true;
+                }
+            }
             Action::Quit => {
                 info!("survivors script: {at}s quit");
                 exit.write(AppExit::Success);
             }
+        }
+    }
+    // The OS modifier poll cannot see scripted holds; retain other synthetic input sources.
+    for &(key, _) in &s.down {
+        if !hold.0.contains(&key) {
+            hold.0.push(key);
         }
     }
 }
@@ -200,6 +223,14 @@ fn parse_step(step: &str) -> Option<(f32, Action)> {
                 .filter(|s: &f32| s.is_finite() && *s > 0.0)?;
             Action::Hold(k, secs)
         }
+        "look" => {
+            let delta = Vec2::new(words.next()?.parse().ok()?, words.next()?.parse().ok()?);
+            if !delta.is_finite() {
+                return None;
+            }
+            Action::Look(delta)
+        }
+        "focus" => Action::Focus,
         "quit" => Action::Quit,
         _ => return None,
     };
@@ -283,6 +314,8 @@ fn key(name: &str) -> Option<KeyCode> {
         "ESCAPE" | "ESC" => KeyCode::Escape,
         "ENTER" | "RETURN" => KeyCode::Enter,
         "TAB" => KeyCode::Tab,
+        "ALT" | "ALTLEFT" => KeyCode::AltLeft,
+        "ALTRIGHT" => KeyCode::AltRight,
         "UP" => KeyCode::ArrowUp,
         "DOWN" => KeyCode::ArrowDown,
         "LEFT" => KeyCode::ArrowLeft,
@@ -297,14 +330,19 @@ mod tests {
 
     #[test]
     fn a_script_reads_in_time_order() {
-        let steps = parse("8.5 shot edge; 6 shot overlay ;7 key f9; 9 hold W 2; 13 quit;");
+        let steps = parse(
+            "8.5 shot edge; 0 focus; 6 shot overlay ;7 key f9; 9 hold W 2; 10 look -120.5 20; 11 hold Alt 1; 13 quit;",
+        );
         assert_eq!(
             steps,
             vec![
+                (0.0, Action::Focus),
                 (6.0, Action::Shot("overlay".into())),
                 (7.0, Action::Key(KeyCode::F9)),
                 (8.5, Action::Shot("edge".into())),
                 (9.0, Action::Hold(KeyCode::KeyW, 2.0)),
+                (10.0, Action::Look(Vec2::new(-120.5, 20.0))),
+                (11.0, Action::Hold(KeyCode::AltLeft, 1.0)),
                 (13.0, Action::Quit),
             ]
         );
@@ -313,9 +351,60 @@ mod tests {
     #[test]
     fn a_step_that_does_not_read_is_skipped() {
         let steps = parse(
-            "x shot a; 1 shot; 2 key F13; 3 hold W; 4 shot ../up; 5 shot a b; 6 jump; 7 key Esc",
+            "x shot a; 1 shot; 2 key F13; 3 hold W; 4 shot ../up; 5 shot a b; 6 jump; \
+             7 key Esc; 8 look; 9 look 1; 10 look NaN 1; 11 look 1 inf; \
+             12 look -inf 0; 13 look 0 NaN; 14 look 1 2 3; 15 focus extra",
         );
         assert_eq!(steps, vec![(7.0, Action::Key(KeyCode::Escape))]);
+    }
+
+    #[test]
+    fn scripted_look_adds_to_the_frames_mouse_motion() {
+        use bevy::ecs::system::RunSystemOnce;
+
+        let mut world = World::new();
+        world.insert_resource(Time::<Real>::default());
+        world.insert_resource(State::new(Phase::Playing));
+        world.insert_resource(Script {
+            steps: parse("0 look -12 6; 0 look 0 0"),
+            ..default()
+        });
+        world.init_resource::<ButtonInput<KeyCode>>();
+        world.init_resource::<benilla_world::modkeys::SyntheticHold>();
+        world.insert_resource(AccumulatedMouseMotion { delta: Vec2::new(2.0, 3.0) });
+        world.init_resource::<Messages<AppExit>>();
+        world.run_system_once(play).unwrap();
+        assert_eq!(world.resource::<AccumulatedMouseMotion>().delta, Vec2::new(-10.0, 9.0));
+    }
+
+    #[test]
+    fn scripted_modifiers_are_published_then_released_without_clearing_other_keys() {
+        use bevy::ecs::system::RunSystemOnce;
+        use benilla_world::modkeys::SyntheticHold;
+
+        let mut world = World::new();
+        world.insert_resource(Time::<Real>::default());
+        world.insert_resource(State::new(Phase::Playing));
+        world.insert_resource(Script { steps: parse("0 hold Alt 1; 0 focus"), ..default() });
+        world.init_resource::<ButtonInput<KeyCode>>();
+        world.init_resource::<AccumulatedMouseMotion>();
+        world.insert_resource(SyntheticHold(vec![KeyCode::ControlLeft]));
+        world.init_resource::<Messages<AppExit>>();
+        let window = world.spawn((Window { focused: false, ..default() }, PrimaryWindow)).id();
+
+        world.run_system_once(play).unwrap();
+        assert!(world.get::<Window>(window).unwrap().focused);
+        assert!(world.resource::<ButtonInput<KeyCode>>().pressed(KeyCode::AltLeft));
+        assert_eq!(world.resource::<SyntheticHold>().0, vec![KeyCode::ControlLeft, KeyCode::AltLeft]);
+
+        world.resource_mut::<Time<Real>>().advance_by(std::time::Duration::from_secs_f32(0.5));
+        world.run_system_once(play).unwrap();
+        assert_eq!(world.resource::<SyntheticHold>().0, vec![KeyCode::ControlLeft, KeyCode::AltLeft]);
+
+        world.resource_mut::<Time<Real>>().advance_by(std::time::Duration::from_secs_f32(0.6));
+        world.run_system_once(play).unwrap();
+        assert!(!world.resource::<ButtonInput<KeyCode>>().pressed(KeyCode::AltLeft));
+        assert_eq!(world.resource::<SyntheticHold>().0, vec![KeyCode::ControlLeft]);
     }
 
     #[test]
@@ -327,6 +416,9 @@ mod tests {
         assert_eq!(key("7"), Some(KeyCode::Digit7));
         assert_eq!(key("space"), Some(KeyCode::Space));
         assert_eq!(key("Left"), Some(KeyCode::ArrowLeft));
+        assert_eq!(key("Alt"), Some(KeyCode::AltLeft));
+        assert_eq!(key("altleft"), Some(KeyCode::AltLeft));
+        assert_eq!(key("AltRight"), Some(KeyCode::AltRight));
         assert_eq!(key("??"), None);
     }
 }

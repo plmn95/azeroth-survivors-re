@@ -442,6 +442,7 @@ mod macos {
         screen: Res<crate::loading_screen::LoadingScreen>,
         rig: Res<CameraControl>,
         cinematic: Option<Res<crate::cinematic::Cinematic>>,
+        windows: Query<&bevy::window::CursorOptions, With<bevy::window::PrimaryWindow>>,
         mut focus: MessageReader<bevy::window::WindowFocused>,
         // The `Local`s below remember OS state, which outlives the VM, so none is a
         // [`crate::ui_script::VmMemo`].
@@ -481,9 +482,11 @@ mod macos {
                 }
             }
         }
-        // A cinematic hides the pointer too (`0x58b590`); `CursorOptions.visible` is inert here, so
-        // it joins the look's hide/unhide pair, keeping AppKit's hide counter balanced.
-        let looking = rig.holds_cursor() || cinematic.is_some_and(|c| c.is_playing());
+        // Keep the native hide/unhide pair balanced for engine look, cinematics and
+        // Bevy cursor visibility requested by an extended game such as Survivors.
+        let looking = rig.holds_cursor()
+            || cinematic.is_some_and(|c| c.is_playing())
+            || windows.iter().any(|cursor| !cursor.visible);
         let stem = mode.0.stem();
         // The key names the chosen cursor, so `NSCursor::set`, a WindowServer round-trip that can
         // stall the main thread for milliseconds, fires only on a change or a drift.
